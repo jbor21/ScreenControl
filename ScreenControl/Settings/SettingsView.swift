@@ -1,0 +1,241 @@
+import AppKit
+import SwiftUI
+
+struct SettingsView: View {
+    var body: some View {
+        TabView {
+            GeneralSettingsView()
+                .tabItem { Label("General", systemImage: "gearshape") }
+            ShortcutsSettingsView()
+                .tabItem { Label("Shortcuts", systemImage: "keyboard") }
+            AboutView()
+                .tabItem { Label("About", systemImage: "info.circle") }
+        }
+        .frame(width: 540, height: 460)
+    }
+}
+
+// MARK: - General
+
+struct GeneralSettingsView: View {
+    @ObservedObject var settings = SettingsStore.shared
+    @ObservedObject var model = AppModel.shared
+    @State private var launchAtLogin = SettingsStore.shared.launchAtLogin
+    @State private var launchAtLoginError: String?
+
+    var body: some View {
+        Form {
+            Section("Keyboard shortcuts rotate") {
+                Picker("Target", selection: $settings.hotkeyTarget) {
+                    Text("Display under the mouse pointer").tag(HotkeyTarget.displayUnderMouse)
+                    Text("Main display").tag(HotkeyTarget.mainDisplay)
+                    Text("All external displays").tag(HotkeyTarget.allExternalDisplays)
+                    Divider()
+                    ForEach(model.displays) { display in
+                        Text(display.name).tag(HotkeyTarget.specificDisplay(display.persistentID))
+                    }
+                    if let disconnected = disconnectedTarget {
+                        Text("Disconnected display").tag(disconnected)
+                    }
+                }
+                Text("Choose which display the rotation shortcuts act on. \"Display under the mouse pointer\" is handy when you have several external monitors.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Displays") {
+                Toggle("Show the built-in display in the menu", isOn: $settings.showBuiltinDisplay)
+                Toggle("Allow rotating the built-in display", isOn: $settings.allowBuiltinRotation)
+                Text("Rotating a MacBook's own panel is rarely useful and can be disorienting, so it is off by default. External monitors are always rotatable.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Startup") {
+                Toggle("Launch ScreenControl at login", isOn: launchAtLoginBinding)
+                if let launchAtLoginError {
+                    Text(launchAtLoginError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            Section("Rotation mechanism") {
+                let backends = RotationService.availableBackends
+                if backends.isEmpty {
+                    Text("No rotation mechanism was found on this Mac.")
+                        .foregroundStyle(.red)
+                } else {
+                    Text("Available: " + backends.map(\.rawValue).joined(separator: ", "))
+                }
+                Text("macOS has no public API for setting rotation, so ScreenControl uses the same private SkyLight call that System Settings does, with MonitorPanel and IOKit as fallbacks.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var disconnectedTarget: HotkeyTarget? {
+        guard let id = settings.hotkeyTarget.specificDisplayID,
+              !model.displays.contains(where: { $0.persistentID == id }) else {
+            return nil
+        }
+        return settings.hotkeyTarget
+    }
+
+    private var launchAtLoginBinding: Binding<Bool> {
+        Binding(
+            get: { launchAtLogin },
+            set: { enabled in
+                do {
+                    try settings.setLaunchAtLogin(enabled)
+                    launchAtLogin = settings.launchAtLogin
+                    launchAtLoginError = nil
+                } catch {
+                    launchAtLogin = settings.launchAtLogin
+                    launchAtLoginError = "Couldn't update the login item: \(error.localizedDescription)"
+                }
+            }
+        )
+    }
+}
+
+// MARK: - Shortcuts
+
+struct ShortcutsSettingsView: View {
+    @ObservedObject var settings = SettingsStore.shared
+
+    var body: some View {
+        Form {
+            Section("Rotation shortcuts") {
+                ForEach(HotkeyAction.allCases) { action in
+                    ShortcutRecorderRow(
+                        title: action.title,
+                        shortcut: Binding(
+                            get: { settings.shortcuts[action] },
+                            set: { settings.setShortcut($0, for: action) }
+                        )
+                    )
+                }
+            }
+
+            Section {
+                Text("Click a shortcut to record a new one, then press the keys. Shortcuts need at least one of ⌘, ⌥ or ⌃. Press ⎋ to cancel. Recording the same keys for two actions moves the shortcut to the newer one.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Restore Default Shortcuts") {
+                    settings.restoreDefaultShortcuts()
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// One row: action title on the left, the recorded combination (or a prompt) on the right.
+/// Clicking toggles recording; a local key monitor captures the next valid combination.
+struct ShortcutRecorderRow: View {
+    let title: String
+    @Binding var shortcut: KeyboardShortcut?
+
+    @State private var isRecording = false
+    @State private var monitor: Any?
+
+    var body: some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Button {
+                if isRecording { stopRecording() } else { startRecording() }
+            } label: {
+                if isRecording {
+                    Text("Type shortcut…")
+                        .foregroundStyle(Color.accentColor)
+                        .frame(minWidth: 120)
+                } else if let shortcut {
+                    Text(shortcut.display)
+                        .frame(minWidth: 120)
+                } else {
+                    Text("Record Shortcut")
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 120)
+                }
+            }
+            .buttonStyle(.bordered)
+
+            Button {
+                stopRecording()
+                shortcut = nil
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(shortcut == nil)
+            .help("Remove shortcut")
+        }
+        .onDisappear { stopRecording() }
+    }
+
+    private func startRecording() {
+        guard monitor == nil else { return }
+        isRecording = true
+        HotkeyManager.shared.beginSuspension()
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == 53 { // Escape cancels
+                stopRecording()
+                return nil
+            }
+            if let recorded = KeyboardShortcut(event: event) {
+                shortcut = recorded
+                stopRecording()
+            }
+            // Swallow everything while recording so keys don't reach the rest of the window.
+            return nil
+        }
+    }
+
+    private func stopRecording() {
+        guard let monitor else {
+            isRecording = false
+            return
+        }
+        NSEvent.removeMonitor(monitor)
+        self.monitor = nil
+        isRecording = false
+        HotkeyManager.shared.endSuspension()
+    }
+}
+
+// MARK: - About
+
+struct AboutView: View {
+    private var version: String {
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
+        return "Version \(short) (\(build))"
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "rotate.right")
+                .font(.system(size: 48))
+                .foregroundStyle(Color.accentColor)
+            Text("ScreenControl")
+                .font(.title)
+            Text(version)
+                .foregroundStyle(.secondary)
+            Text("Rotate external displays from the menu bar or with a global keyboard shortcut. Also switches resolution and refresh rate, dims displays in software, and toggles mirroring.")
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 400)
+            Link("Source on GitHub", destination: URL(string: "https://github.com/boboborenstein-collab/ScreenControl")!)
+            Text("Inspired by BetterDisplay; rotation and hotkey techniques informed by the open-source Crisp, FreeDisplay and displayplacer projects.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+        }
+        .padding(32)
+    }
+}
