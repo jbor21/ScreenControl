@@ -12,14 +12,24 @@ if ! command -v xcodebuild >/dev/null 2>&1; then
     exit 1
 fi
 
+APP="build/Release/ScreenControl.app"
+
+# Build unsigned, then sign here. Finder likes to attach extended attributes (resource forks,
+# Finder info, quarantine flags) to files in folders such as ~/Desktop, and codesign refuses to
+# sign a bundle that contains them ("resource fork, Finder information, or similar detritus not
+# allowed"). Stripping them before signing sidesteps that.
 xcodebuild \
     -project ScreenControl.xcodeproj \
     -target ScreenControl \
     -configuration Release \
+    -quiet \
     SYMROOT="$PWD/build" \
+    CODE_SIGNING_ALLOWED=NO \
     build
 
-APP="build/Release/ScreenControl.app"
+xattr -cr "$APP"
+codesign --force --sign - --options runtime --timestamp=none "$APP"
+
 echo
 echo "Built: $APP"
 
