@@ -1,8 +1,11 @@
 #!/bin/bash
-# Builds a Release ScreenControl.app into ./build and optionally installs it to /Applications.
+# Builds a Release ScreenControl.app and either leaves it in ./build or installs it to /Applications.
 #
-#   scripts/build-app.sh            # build only  -> build/Release/ScreenControl.app
-#   scripts/build-app.sh --install  # build and copy to /Applications, then launch
+#   scripts/build-app.sh            # build only  -> build/ScreenControl.app
+#   scripts/build-app.sh --install  # build, install to /Applications, launch
+#
+# The build itself happens in a temporary folder outside the repo so Spotlight and Launchpad only
+# ever see one copy of the app.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -12,7 +15,9 @@ if ! command -v xcodebuild >/dev/null 2>&1; then
     exit 1
 fi
 
-APP="build/Release/ScreenControl.app"
+WORK="$(mktemp -d /tmp/ScreenControl-build.XXXXXX)"
+trap 'rm -rf "$WORK"' EXIT
+BUILT="$WORK/Release/ScreenControl.app"
 
 # Build unsigned, then sign here. Finder likes to attach extended attributes (resource forks,
 # Finder info, quarantine flags) to files in folders such as ~/Desktop, and codesign refuses to
@@ -23,15 +28,12 @@ xcodebuild \
     -target ScreenControl \
     -configuration Release \
     -quiet \
-    SYMROOT="$PWD/build" \
+    SYMROOT="$WORK" \
     CODE_SIGNING_ALLOWED=NO \
     build
 
-xattr -cr "$APP"
-codesign --force --sign - --options runtime --timestamp=none "$APP"
-
-echo
-echo "Built: $APP"
+xattr -cr "$BUILT"
+codesign --force --sign - --options runtime --timestamp=none "$BUILT"
 
 if [[ "${1:-}" == "--install" ]]; then
     if pgrep -x ScreenControl >/dev/null 2>&1; then
@@ -39,7 +41,14 @@ if [[ "${1:-}" == "--install" ]]; then
         sleep 1
     fi
     rm -rf /Applications/ScreenControl.app
-    cp -R "$APP" /Applications/ScreenControl.app
+    cp -R "$BUILT" /Applications/ScreenControl.app
+    # Stale copies from earlier builds show up as duplicates in Spotlight; clear them out.
+    rm -rf build
     echo "Installed to /Applications/ScreenControl.app"
     open /Applications/ScreenControl.app
+else
+    rm -rf build
+    mkdir -p build
+    cp -R "$BUILT" build/ScreenControl.app
+    echo "Built: build/ScreenControl.app"
 fi

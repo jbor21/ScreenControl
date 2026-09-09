@@ -11,7 +11,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "ScreenControl",
-            path: "ScreenControl"
+            path: "ScreenControl",
+            exclude: ["Assets.xcassets"]
         )
     ]
 )
