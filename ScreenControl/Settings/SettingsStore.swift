@@ -15,12 +15,27 @@ final class SettingsStore: ObservableObject {
         static let brightnessKeysEnabled = "brightnessKeysEnabled"
         static let hasRequestedAccessibility = "hasRequestedAccessibility"
         static let extendedDimming = "extendedDimming"
+        static let presets = "presets.v1"
     }
 
     @Published var shortcuts: [HotkeyAction: KeyboardShortcut] {
         didSet {
             store(shortcuts, forKey: Keys.shortcuts)
-            HotkeyManager.shared.apply(shortcuts)
+            registerHotkeys()
+        }
+    }
+
+    /// Saved display setups, in the order shown in the menu.
+    @Published var presets: [DisplayPreset] {
+        didSet {
+            store(presets, forKey: Keys.presets)
+            // Renaming a preset changes the array on every keystroke; only re-register when a
+            // shortcut actually changed.
+            let before = oldValue.map { ($0.id, $0.shortcut) }
+            let after = presets.map { ($0.id, $0.shortcut) }
+            if before.count != after.count || zip(before, after).contains(where: { $0.0 != $1.0 || $0.1 != $1.1 }) {
+                registerHotkeys()
+            }
         }
     }
 
@@ -74,24 +89,81 @@ final class SettingsStore: ObservableObject {
         softwareBrightness = Self.load([String: Double].self, forKey: Keys.softwareBrightness, from: defaults) ?? [:]
         brightnessKeysEnabled = defaults.object(forKey: Keys.brightnessKeysEnabled) as? Bool ?? true
         extendedDimming = defaults.object(forKey: Keys.extendedDimming) as? Bool ?? true
+        presets = Self.load([DisplayPreset].self, forKey: Keys.presets, from: defaults) ?? []
+    }
+
+    // MARK: Hotkeys
+
+    /// Every shortcut in one map, fixed actions and presets alike.
+    var hotkeyBindings: [HotkeyIdentifier: KeyboardShortcut] {
+        var result: [HotkeyIdentifier: KeyboardShortcut] = [:]
+        for (action, shortcut) in shortcuts {
+            result[.action(action)] = shortcut
+        }
+        for preset in presets {
+            if let shortcut = preset.shortcut {
+                result[.preset(preset.id)] = shortcut
+            }
+        }
+        return result
+    }
+
+    func registerHotkeys() {
+        HotkeyManager.shared.apply(hotkeyBindings)
     }
 
     func restoreDefaultShortcuts() {
         shortcuts = HotkeyAction.defaultShortcuts
     }
 
-    /// Assigns `shortcut` to `action`, clearing it from any other action that used the same keys.
+    /// Assigns `shortcut` to `action`, clearing it from anything else that used the same keys.
     func setShortcut(_ shortcut: KeyboardShortcut?, for action: HotkeyAction) {
-        var updated = shortcuts
         if let shortcut {
-            for (other, existing) in updated where other != action && existing.sameKeys(as: shortcut) {
-                updated[other] = nil
-            }
-            updated[action] = shortcut
-        } else {
-            updated[action] = nil
+            releaseShortcut(shortcut, except: .action(action))
         }
-        shortcuts = updated
+        shortcuts[action] = shortcut
+    }
+
+    /// Assigns `shortcut` to a preset, clearing it from anything else that used the same keys.
+    func setShortcut(_ shortcut: KeyboardShortcut?, forPreset presetID: UUID) {
+        guard let index = presets.firstIndex(where: { $0.id == presetID }) else { return }
+        if let shortcut {
+            releaseShortcut(shortcut, except: .preset(presetID))
+        }
+        presets[index].shortcut = shortcut
+    }
+
+    private func releaseShortcut(_ shortcut: KeyboardShortcut, except keep: HotkeyIdentifier) {
+        for (action, existing) in shortcuts where existing.sameKeys(as: shortcut) && .action(action) != keep {
+            shortcuts[action] = nil
+        }
+        for index in presets.indices where presets[index].shortcut?.sameKeys(as: shortcut) == true && .preset(presets[index].id) != keep {
+            presets[index].shortcut = nil
+        }
+    }
+
+    // MARK: Presets
+
+    @discardableResult
+    func addPreset(_ preset: DisplayPreset) -> DisplayPreset {
+        presets.append(preset)
+        return preset
+    }
+
+    func updatePreset(_ preset: DisplayPreset) {
+        guard let index = presets.firstIndex(where: { $0.id == preset.id }) else { return }
+        presets[index] = preset
+    }
+
+    func removePreset(_ id: UUID) {
+        presets.removeAll { $0.id == id }
+    }
+
+    /// "Preset 1", "Preset 2", … skipping names already taken.
+    func nextPresetName() -> String {
+        var number = presets.count + 1
+        while presets.contains(where: { $0.name == "Preset \(number)" }) { number += 1 }
+        return "Preset \(number)"
     }
 
     // MARK: Launch at login

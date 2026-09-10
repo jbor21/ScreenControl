@@ -22,6 +22,10 @@ final class DDCService {
 
     /// VCP code for backlight brightness.
     static let brightnessVCP: UInt8 = 0x10
+    /// VCP code for the monitor's power mode (1 = on, 4 = standby, 5 = off).
+    static let powerVCP: UInt8 = 0xD6
+    static let powerOn: UInt16 = 0x01
+    static let powerStandby: UInt16 = 0x04
 
     private static let log = Logger(subsystem: "com.boboborenstein.ScreenControl", category: "ddc")
 
@@ -67,6 +71,19 @@ final class DDCService {
             if attempt < 2 { Thread.sleep(forTimeInterval: 0.05) }
         }
         return false
+    }
+
+    /// Async wrappers that hop onto `queue`, for callers not already on it.
+    func writeAsync(vcp: UInt8, value: UInt16, for id: CGDirectDisplayID) async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: self.write(vcp: vcp, value: value, for: id)) }
+        }
+    }
+
+    func readAsync(vcp: UInt8, for id: CGDirectDisplayID) async -> (current: UInt16, max: UInt16)? {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: self.read(vcp: vcp, for: id)) }
+        }
     }
 
     /// Forgets which I2C channel belongs to which display. Call whenever the display

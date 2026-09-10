@@ -16,6 +16,49 @@ struct MenuContentView: View {
             }
         }
 
+        if !model.turnedOffDisplays.isEmpty {
+            Section("Turned Off") {
+                ForEach(model.turnedOffDisplays) { record in
+                    Button("Turn On \(record.name)") {
+                        model.turnOn(record)
+                    }
+                }
+                if model.turnedOffDisplays.count > 1 {
+                    Button("Turn All Displays Back On") {
+                        model.turnOnAllDisplays()
+                    }
+                }
+            }
+        }
+
+        Divider()
+
+        Menu("Presets") {
+            if settings.presets.isEmpty {
+                Text("No presets yet")
+            } else {
+                ForEach(settings.presets) { preset in
+                    Button {
+                        model.applyPreset(preset)
+                    } label: {
+                        if let shortcut = preset.shortcut {
+                            Text("\(preset.name)   \(shortcut.display)")
+                        } else {
+                            Text(preset.name)
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button("Save Current Setup as Preset…") {
+                let preset = model.saveCurrentSetupAsPreset()
+                SettingsWindowController.shared.show(tab: .presets, editingPreset: preset.id)
+            }
+            Button("Manage Presets…") {
+                SettingsWindowController.shared.show(tab: .presets)
+            }
+        }
+
         Divider()
 
         if let shortcut = settings.shortcuts[.rotateClockwise] {
@@ -137,11 +180,33 @@ struct DisplayMenu: View {
                 .pickerStyle(.inline)
             }
 
-            if !display.isMain {
-                Section {
+            if model.supportsInputSwitching(display) {
+                Section("Monitor Input") {
+                    Picker("Monitor Input", selection: inputBinding) {
+                        ForEach(inputOptions) { input in
+                            Text(input.name).tag(input.code)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    Text("Switching to another device? Come back with the monitor's own buttons.")
+                }
+            }
+
+            Section {
+                if !display.isMain {
                     Button(display.isMirroring ? "Stop Mirroring" : "Mirror Main Display") {
                         model.toggleMirroring(of: display)
                     }
+                }
+                if let record = model.power.record(for: display.persistentID) {
+                    Button("Turn On Display") {
+                        model.turnOn(record)
+                    }
+                } else {
+                    Button(DisplayPowerService.disconnectSupported ? "Turn Off Display (disconnect)" : "Turn Off Display (standby)") {
+                        model.turnOff(display)
+                    }
+                    .disabled(!model.canTurnOff(display))
                 }
             }
         } label: {
@@ -158,7 +223,8 @@ struct DisplayMenu: View {
         if display.isMain { parts.append("Main") }
         if display.isBuiltin { parts.append("Built-in") }
         if display.isMirroring { parts.append("Mirroring") }
-        if model.busyDisplays.contains(display.id) { parts.append("Rotating…") }
+        if model.isTurnedOff(display) { parts.append("Standby") }
+        if model.busyDisplays.contains(display.id) { parts.append("Working…") }
         return parts.joined(separator: "  ·  ")
     }
 
@@ -180,6 +246,25 @@ struct DisplayMenu: View {
         Binding(
             get: { model.currentModeIDs[display.id] ?? 0 },
             set: { model.applyMode($0, for: display) }
+        )
+    }
+
+    /// Common inputs, plus whatever the monitor currently reports if it is not among them.
+    private var inputOptions: [DisplayInput] {
+        var options = DisplayInput.common
+        if let current = model.currentInput(for: display), !options.contains(current) {
+            options.insert(current, at: 0)
+        }
+        return options
+    }
+
+    private var inputBinding: Binding<UInt16> {
+        Binding(
+            get: { model.currentInput(for: display)?.code ?? 0 },
+            set: { code in
+                guard code != 0, let input = inputOptions.first(where: { $0.code == code }) else { return }
+                model.selectInput(input, for: display)
+            }
         )
     }
 

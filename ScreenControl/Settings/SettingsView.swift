@@ -2,14 +2,22 @@ import AppKit
 import SwiftUI
 
 struct SettingsView: View {
+    @ObservedObject var navigation = SettingsNavigation.shared
+
     var body: some View {
-        TabView {
+        TabView(selection: $navigation.tab) {
             GeneralSettingsView()
                 .tabItem { Label("General", systemImage: "gearshape") }
+                .tag(SettingsTab.general)
             ShortcutsSettingsView()
                 .tabItem { Label("Shortcuts", systemImage: "keyboard") }
+                .tag(SettingsTab.shortcuts)
+            PresetsSettingsView()
+                .tabItem { Label("Presets", systemImage: "rectangle.stack") }
+                .tag(SettingsTab.presets)
             AboutView()
                 .tabItem { Label("About", systemImage: "info.circle") }
+                .tag(SettingsTab.about)
         }
         .frame(width: 560, height: 560)
     }
@@ -142,20 +150,32 @@ struct ShortcutsSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Rotation shortcuts") {
-                ForEach(HotkeyAction.allCases) { action in
-                    ShortcutRecorderRow(
-                        title: action.title,
-                        shortcut: Binding(
-                            get: { settings.shortcuts[action] },
-                            set: { settings.setShortcut($0, for: action) }
+            ForEach(HotkeyAction.Category.allCases, id: \.self) { category in
+                Section(category.rawValue) {
+                    ForEach(HotkeyAction.actions(in: category)) { action in
+                        ShortcutRecorderRow(
+                            title: action.title,
+                            shortcut: Binding(
+                                get: { settings.shortcuts[action] },
+                                set: { settings.setShortcut($0, for: action) }
+                            )
                         )
-                    )
+                    }
+                    if category == .power {
+                        Text("Turns off the target display; if any display is already off, turns them all back on.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if category == .input {
+                        Text("Acts on the same target as the rotation shortcuts. Only monitors that answer DDC/CI can switch inputs.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
             Section {
-                Text("Click a shortcut to record a new one, then press the keys. Shortcuts need at least one of ⌘, ⌥ or ⌃. Press ⎋ to cancel. Recording the same keys for two actions moves the shortcut to the newer one.")
+                Text("Click a shortcut to record a new one, then press the keys. Shortcuts need at least one of ⌘, ⌥ or ⌃. Press ⎋ to cancel. Recording the same keys for two actions moves the shortcut to the newer one. Presets get their shortcuts in the Presets tab.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("Restore Default Shortcuts") {
@@ -239,6 +259,96 @@ struct ShortcutRecorderRow: View {
         self.monitor = nil
         isRecording = false
         HotkeyManager.shared.endSuspension()
+    }
+}
+
+// MARK: - Presets
+
+struct PresetsSettingsView: View {
+    @ObservedObject var settings = SettingsStore.shared
+    @ObservedObject var model = AppModel.shared
+    @ObservedObject var navigation = SettingsNavigation.shared
+
+    var body: some View {
+        Form {
+            if settings.presets.isEmpty {
+                Section {
+                    Text("A preset remembers rotation, resolution, refresh rate and brightness for every connected display, so you can jump between setups (say, portrait for reading and landscape for video) with one shortcut.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            ForEach(settings.presets) { preset in
+                PresetRow(preset: preset, autoFocus: navigation.presetToEdit == preset.id)
+            }
+
+            Section {
+                Button("Save Current Setup as New Preset") {
+                    let preset = model.saveCurrentSetupAsPreset()
+                    navigation.presetToEdit = preset.id
+                }
+                Text("Displays are matched by their hardware identity, so a preset skips monitors that are not connected when it is applied.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// Editor for one preset: name, shortcut, what it contains, and actions.
+struct PresetRow: View {
+    let preset: DisplayPreset
+    let autoFocus: Bool
+
+    @ObservedObject var settings = SettingsStore.shared
+    @ObservedObject var model = AppModel.shared
+    @FocusState private var nameFocused: Bool
+
+    var body: some View {
+        Section {
+            TextField("Name", text: nameBinding)
+                .focused($nameFocused)
+                .onAppear {
+                    if autoFocus { nameFocused = true }
+                }
+            ShortcutRecorderRow(
+                title: "Shortcut",
+                shortcut: Binding(
+                    get: { preset.shortcut },
+                    set: { settings.setShortcut($0, forPreset: preset.id) }
+                )
+            )
+            Text(preset.summary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Button("Apply") {
+                    model.applyPreset(preset)
+                }
+                Button("Update from Current Setup") {
+                    var updated = model.captureCurrentSetup(named: preset.name)
+                    updated.id = preset.id
+                    updated.shortcut = preset.shortcut
+                    settings.updatePreset(updated)
+                }
+                Spacer()
+                Button("Delete", role: .destructive) {
+                    settings.removePreset(preset.id)
+                }
+            }
+        }
+    }
+
+    private var nameBinding: Binding<String> {
+        Binding(
+            get: { preset.name },
+            set: { newName in
+                var updated = preset
+                updated.name = newName
+                settings.updatePreset(updated)
+            }
+        )
     }
 }
 

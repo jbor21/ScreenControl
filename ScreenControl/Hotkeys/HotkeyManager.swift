@@ -9,15 +9,15 @@ final class HotkeyManager {
     static let shared = HotkeyManager()
 
     /// Invoked on the main thread when a registered shortcut is pressed.
-    var onAction: ((HotkeyAction) -> Void)?
+    var onTrigger: ((HotkeyIdentifier) -> Void)?
 
     private static let log = Logger(subsystem: "com.boboborenstein.ScreenControl", category: "hotkeys")
     private static let signature = OSType(0x5343_7472) // "SCtr"
 
     private var handlerRef: EventHandlerRef?
-    private var registrations: [UInt32: (ref: EventHotKeyRef, action: HotkeyAction)] = [:]
+    private var registrations: [UInt32: (ref: EventHotKeyRef, identifier: HotkeyIdentifier)] = [:]
     private var nextID: UInt32 = 1
-    private var bindings: [HotkeyAction: KeyboardShortcut] = [:]
+    private var bindings: [HotkeyIdentifier: KeyboardShortcut] = [:]
     /// While a shortcut recorder is open every hotkey is unregistered, so the recorder can capture
     /// combinations that are currently bound. A counter rather than a flag because two recorder
     /// rows can briefly overlap during a takeover.
@@ -25,7 +25,7 @@ final class HotkeyManager {
 
     private init() {}
 
-    func apply(_ bindings: [HotkeyAction: KeyboardShortcut]) {
+    func apply(_ bindings: [HotkeyIdentifier: KeyboardShortcut]) {
         self.bindings = bindings
         synchronize()
     }
@@ -46,13 +46,13 @@ final class HotkeyManager {
         }
         registrations = [:]
         guard suspensions == 0 else { return }
-        for (action, shortcut) in bindings {
-            register(shortcut, for: action)
+        for (identifier, shortcut) in bindings {
+            register(shortcut, for: identifier)
         }
         Self.log.info("registered \(self.registrations.count) hotkey(s)")
     }
 
-    private func register(_ shortcut: KeyboardShortcut, for action: HotkeyAction) {
+    private func register(_ shortcut: KeyboardShortcut, for identifier: HotkeyIdentifier) {
         installHandlerIfNeeded()
         let id = nextID
         nextID &+= 1
@@ -67,7 +67,7 @@ final class HotkeyManager {
             &ref
         )
         if status == noErr, let ref {
-            registrations[id] = (ref, action)
+            registrations[id] = (ref, identifier)
         } else {
             Self.log.error("RegisterEventHotKey failed (\(status)) for \(shortcut.display, privacy: .public)")
         }
@@ -103,7 +103,7 @@ final class HotkeyManager {
 
     private func fire(id: UInt32) {
         guard let registration = registrations[id] else { return }
-        Self.log.info("hotkey pressed: \(registration.action.rawValue, privacy: .public)")
-        onAction?(registration.action)
+        Self.log.info("hotkey pressed: \(registration.identifier.logName, privacy: .public)")
+        onTrigger?(registration.identifier)
     }
 }

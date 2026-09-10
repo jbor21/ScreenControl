@@ -18,6 +18,8 @@ final class AppModel: ObservableObject {
     let settings = SettingsStore.shared
     let brightness = BrightnessService.shared
     let brightnessKeys = BrightnessKeyService.shared
+    let inputs = InputService.shared
+    let power = DisplayPowerService.shared
 
     private static let log = Logger(subsystem: "com.boboborenstein.ScreenControl", category: "app")
     private var cancellables: Set<AnyCancellable> = []
@@ -40,14 +42,18 @@ final class AppModel: ObservableObject {
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
             .sink { [weak self] _ in
                 self?.brightness.reset()
+                self?.inputs.reset()
                 self?.refresh()
             }
             .store(in: &cancellables)
 
-        HotkeyManager.shared.onAction = { [weak self] action in
-            self?.perform(action)
+        HotkeyManager.shared.onTrigger = { [weak self] identifier in
+            switch identifier {
+            case .action(let action): self?.perform(action)
+            case .preset(let id): self?.applyPreset(id: id)
+            }
         }
-        HotkeyManager.shared.apply(settings.shortcuts)
+        settings.registerHotkeys()
 
         settings.$brightnessKeysEnabled
             .sink { [weak self] enabled in self?.applyBrightnessKeys(enabled: enabled) }
@@ -64,10 +70,17 @@ final class AppModel: ObservableObject {
         brightnessKeys.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
+        inputs.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        power.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
     }
 
     func shutdown() {
         brightnessKeys.stop()
+        power.restoreAllSynchronously()
         if hasAppliedDimming {
             DisplayService.restoreGamma()
         }
@@ -102,6 +115,8 @@ final class AppModel: ObservableObject {
 
         reapplySoftwareBrightness()
         brightness.probe(current)
+        inputs.probe(current)
+        power.reconcile(online: current)
     }
 
     var visibleDisplays: [DisplayInfo] {
@@ -129,22 +144,39 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // MARK: Rotation
+    // MARK: Hotkey actions
 
     func perform(_ action: HotkeyAction) {
-        let targets = displays(for: settings.hotkeyTarget)
-        guard !targets.isEmpty else {
-            NSSound.beep()
-            return
-        }
-        for display in targets {
-            guard canRotate(display) else {
+        switch action.category {
+        case .rotation:
+            let targets = displays(for: settings.hotkeyTarget)
+            guard !targets.isEmpty else {
                 NSSound.beep()
-                continue
+                return
             }
-            setRotation(action.targetRotation(from: display.rotation), for: display)
+            for display in targets {
+                guard canRotate(display), let degrees = action.targetRotation(from: display.rotation) else {
+                    NSSound.beep()
+                    continue
+                }
+                setRotation(degrees, for: display)
+            }
+        case .power:
+            toggleDisplayPower()
+        case .input:
+            guard let input = action.input else { return }
+            let targets = displays(for: settings.hotkeyTarget).filter { !$0.isBuiltin }
+            guard !targets.isEmpty else {
+                NSSound.beep()
+                return
+            }
+            for display in targets {
+                selectInput(input, for: display)
+            }
         }
     }
+
+    // MARK: Rotation
 
     func rotate(_ display: DisplayInfo, by delta: Int) {
         setRotation(((display.rotation + delta) % 360 + 360) % 360, for: display)
@@ -216,6 +248,175 @@ final class AppModel: ObservableObject {
             DisplayService.setMirroring(of: display.id, to: main.id)
         }
         scheduleRefresh()
+    }
+
+    // MARK: Display power
+
+    var turnedOffDisplays: [TurnedOffDisplay] { power.turnedOff }
+
+    func isTurnedOff(_ display: DisplayInfo) -> Bool {
+        power.isTurnedOff(display.persistentID)
+    }
+
+    func canTurnOff(_ display: DisplayInfo) -> Bool {
+        guard !isTurnedOff(display), !busyDisplays.contains(display.id) else { return false }
+        if DisplayPowerService.disconnectSupported {
+            return displays.count > 1
+        }
+        return !display.isBuiltin && brightnessControl(for: display) == .hardware
+    }
+
+    func turnOff(_ display: DisplayInfo) {
+        guard canTurnOff(display) else {
+            NSSound.beep()
+            return
+        }
+        busyDisplays.insert(display.id)
+        Task { @MainActor in
+            do {
+                try await self.power.turnOff(display)
+            } catch {
+                self.presentError(title: "Couldn't turn off \(display.name)", message: error.localizedDescription)
+            }
+            self.busyDisplays.remove(display.id)
+            self.refresh()
+        }
+    }
+
+    func turnOn(_ record: TurnedOffDisplay) {
+        Task { @MainActor in
+            do {
+                try await self.power.turnOn(record)
+            } catch {
+                self.presentError(title: "Couldn't turn on \(record.name)", message: error.localizedDescription)
+            }
+            self.refresh()
+        }
+    }
+
+    func turnOnAllDisplays() {
+        Task { @MainActor in
+            let errors = await self.power.turnOnAll()
+            if let first = errors.first {
+                self.presentError(title: "Couldn't turn every display back on", message: first.localizedDescription)
+            }
+            self.refresh()
+        }
+    }
+
+    /// Hotkey behaviour: if anything is off, bring it all back; otherwise turn off the target.
+    func toggleDisplayPower() {
+        if !power.turnedOff.isEmpty {
+            turnOnAllDisplays()
+            return
+        }
+        let targets = displays(for: settings.hotkeyTarget)
+        guard let display = targets.first(where: canTurnOff) else {
+            NSSound.beep()
+            return
+        }
+        turnOff(display)
+    }
+
+    // MARK: Monitor input
+
+    func supportsInputSwitching(_ display: DisplayInfo) -> Bool {
+        !display.isBuiltin && !inputs.unsupported.contains(display.id) && brightnessControl(for: display) != .software
+    }
+
+    func currentInput(for display: DisplayInfo) -> DisplayInput? {
+        inputs.currentInput(for: display.id)
+    }
+
+    func selectInput(_ input: DisplayInput, for display: DisplayInfo) {
+        guard supportsInputSwitching(display) else {
+            NSSound.beep()
+            return
+        }
+        inputs.select(input, for: display.id) { [weak self] success in
+            if !success {
+                self?.presentError(title: "Couldn't switch \(display.name) to \(input.name)",
+                                   message: "The monitor did not accept the DDC/CI input command. Not every monitor supports switching inputs this way, and the input code for some ports varies by brand.")
+            }
+        }
+    }
+
+    // MARK: Presets
+
+    /// Snapshot of every online display as a preset with a fresh name.
+    func captureCurrentSetup(named name: String? = nil) -> DisplayPreset {
+        let states = displays.map { display in
+            let mode = currentMode(for: display)
+            return PresetDisplayState(
+                persistentID: display.persistentID,
+                displayName: display.name,
+                rotation: display.rotation,
+                width: mode?.width,
+                height: mode?.height,
+                isHiDPI: mode?.isHiDPI,
+                refreshRate: mode?.refreshRate,
+                brightness: display.isBuiltin ? nil : brightnessLevel(for: display),
+                softwareDimming: softwareBrightness(for: display)
+            )
+        }
+        return DisplayPreset(name: name ?? settings.nextPresetName(), shortcut: nil, displays: states)
+    }
+
+    func saveCurrentSetupAsPreset() -> DisplayPreset {
+        settings.addPreset(captureCurrentSetup())
+    }
+
+    func applyPreset(id: UUID) {
+        guard let preset = settings.presets.first(where: { $0.id == id }) else { return }
+        applyPreset(preset)
+    }
+
+    /// Restores a preset on every connected display it covers: rotation first (it is the slow,
+    /// asynchronous part), then mode, brightness and dimming.
+    func applyPreset(_ preset: DisplayPreset) {
+        let pairs: [(DisplayInfo, PresetDisplayState)] = preset.displays.compactMap { state in
+            guard let display = displays.first(where: { $0.persistentID == state.persistentID }) else { return nil }
+            return (display, state)
+        }
+        guard !pairs.isEmpty else {
+            NSSound.beep()
+            presentError(title: "Preset \"\(preset.name)\" has nothing to apply",
+                         message: "None of the displays saved in this preset are connected right now.")
+            return
+        }
+        Self.log.notice("applying preset \(preset.name, privacy: .public) to \(pairs.count) display(s)")
+        for (display, _) in pairs {
+            busyDisplays.insert(display.id)
+        }
+        Task { @MainActor in
+            var failures: [String] = []
+            for (display, state) in pairs {
+                if state.rotation != display.rotation, !display.isBuiltin || self.settings.allowBuiltinRotation {
+                    do {
+                        _ = try await RotationService.setRotation(state.rotation, of: display.id)
+                    } catch {
+                        failures.append("\(display.name): \(error.localizedDescription)")
+                    }
+                }
+                let modes = DisplayService.availableModes(for: display.id)
+                if let mode = state.bestMode(in: modes), mode.id != DisplayService.currentModeID(for: display.id) {
+                    if !DisplayService.setMode(mode.id, for: display.id) {
+                        failures.append("\(display.name): macOS rejected \(mode.resolutionDescription)")
+                    }
+                }
+                if let level = state.brightness, !display.isBuiltin {
+                    self.brightness.setLevel(level, for: display.id)
+                }
+                self.setSoftwareBrightness(state.softwareDimming, for: display)
+            }
+            for (display, _) in pairs {
+                self.busyDisplays.remove(display.id)
+            }
+            self.refresh()
+            if !failures.isEmpty {
+                self.presentError(title: "Preset \"\(preset.name)\" was only partly applied", message: failures.joined(separator: "\n"))
+            }
+        }
     }
 
     // MARK: Brightness
