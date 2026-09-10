@@ -14,6 +14,7 @@ final class SettingsStore: ObservableObject {
         static let softwareBrightness = "softwareBrightness.v1"
         static let brightnessKeysEnabled = "brightnessKeysEnabled"
         static let hasRequestedAccessibility = "hasRequestedAccessibility"
+        static let extendedDimming = "extendedDimming"
     }
 
     @Published var shortcuts: [HotkeyAction: KeyboardShortcut] {
@@ -48,6 +49,12 @@ final class SettingsStore: ObservableObject {
         didSet { defaults.set(brightnessKeysEnabled, forKey: Keys.brightnessKeysEnabled) }
     }
 
+    /// Whether brightness keeps dimming (in software) below the monitor's hardware minimum, down
+    /// to black.
+    @Published var extendedDimming: Bool {
+        didSet { defaults.set(extendedDimming, forKey: Keys.extendedDimming) }
+    }
+
     /// The system Accessibility prompt is shown automatically once; after that the user opts in
     /// from Settings so the app never nags.
     var hasRequestedAccessibility: Bool {
@@ -66,6 +73,7 @@ final class SettingsStore: ObservableObject {
         showBuiltinDisplay = defaults.object(forKey: Keys.showBuiltinDisplay) as? Bool ?? true
         softwareBrightness = Self.load([String: Double].self, forKey: Keys.softwareBrightness, from: defaults) ?? [:]
         brightnessKeysEnabled = defaults.object(forKey: Keys.brightnessKeysEnabled) as? Bool ?? true
+        extendedDimming = defaults.object(forKey: Keys.extendedDimming) as? Bool ?? true
     }
 
     func restoreDefaultShortcuts() {

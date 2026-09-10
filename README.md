@@ -30,6 +30,9 @@ Requires macOS 14 (Sonoma) or later. Works on Apple Silicon and Intel Macs.
   screen and the same keys adjust the built-in display as usual. ⌥⇧ gives fine steps. There is
   also a Brightness picker per display in the menu. Needs the **Accessibility** permission
   (see below).
+- **Dim to black.** A monitor's own brightness setting bottoms out at "dim", never "off", so the
+  lowest four brightness steps keep dimming in software until the picture is completely black
+  (BetterDisplay's "combined" brightness). Can be turned off in Settings.
 - **Resolution and refresh rate** switching per display, including HiDPI variants.
 - **Software dimming** (gamma-based) per display, for monitors that are too bright at their
   lowest hardware setting. Remembered per display; reset when the app quits.
@@ -130,6 +133,10 @@ permission) and, on each press, looks at which display the mouse pointer is on:
 - **Monitors that ignore DDC/CI** (some TVs, most displays behind USB-C docks or DisplayLink
   adapters) fall back to software dimming, so the keys still do something; the menu shows which
   mode is in use.
+- **Below the hardware minimum** the top 12 of the 16 key steps drive the monitor's backlight
+  and the bottom 4 scale the gamma table (`CGSetDisplayTransferByFormula`) from the monitor's
+  dimmest setting down to black. The extra dimming is transient: it is undone when the app
+  quits, and never persisted, so a display cannot come back black after a restart.
 
 ## Project layout
 

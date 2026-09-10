@@ -144,9 +144,10 @@ enum DisplayService {
 
     // MARK: Software dimming
 
-    /// Dims the display by scaling its gamma table. `level` is 0.1...1.0 where 1.0 is untouched.
+    /// Dims the display by scaling its gamma table. `level` is 0.0...1.0 where 1.0 is untouched
+    /// and 0.0 is black.
     static func setSoftwareBrightness(_ level: Double, for id: CGDirectDisplayID) {
-        let clamped = CGGammaValue(max(0.1, min(1.0, level)))
+        let clamped = CGGammaValue(max(0.0, min(1.0, level)))
         CGSetDisplayTransferByFormula(id, 0, clamped, 1, 0, clamped, 1, 0, clamped, 1)
     }
 

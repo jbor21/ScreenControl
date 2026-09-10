@@ -71,6 +71,10 @@ struct GeneralSettingsView: View {
                 Text("With the pointer on an external monitor, the keyboard's brightness keys change that monitor's brightness (DDC/CI, or software dimming if the monitor doesn't support it). With the pointer on the built-in display they work as usual. Intercepting the keys requires the Accessibility permission; if it stops working after you rebuild the app, remove ScreenControl from the Accessibility list and add it again.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Toggle("Keep dimming below the monitor's minimum, down to black", isOn: $settings.extendedDimming)
+                Text("A monitor's own brightness setting never switches the picture off: 0 is just its dimmest backlight. With this on, the lowest 4 of the 16 brightness steps dim the picture further in software until it is black.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Displays") {

@@ -26,6 +26,12 @@ enum BrightnessControl: Equatable {
 
 /// Owns per-display brightness state and applies changes through `DDCService`, falling back to
 /// gamma dimming for monitors that do not answer. Main-thread API; I2C runs on `DDCService.queue`.
+///
+/// The level exposed to keys and the menu is a single 0…1 "combined" range. A monitor's own
+/// brightness setting never turns the picture off (0 is just the backlight's minimum), so when
+/// extended dimming is on the bottom quarter of the range keeps going below the hardware
+/// minimum by scaling the gamma table, all the way to black, like BetterDisplay's combined
+/// brightness. Above that the range drives the hardware only.
 final class BrightnessService: ObservableObject {
     static let shared = BrightnessService()
 
@@ -35,21 +41,45 @@ final class BrightnessService: ObservableObject {
     static let keyStep: Double = 1.0 / 16.0
     /// With ⌥⇧ held macOS uses quarter steps.
     static let fineKeyStep: Double = 1.0 / 64.0
+    /// Share of the combined range that is software dimming below the hardware minimum
+    /// (4 of the 16 key steps).
+    static let softwareShare: Double = 0.25
 
-    /// Current level (0…1) per display, as last read from or written to the monitor.
+    /// Combined level (0…1) per display.
     @Published private(set) var levels: [CGDirectDisplayID: Double] = [:]
     @Published private(set) var controls: [CGDirectDisplayID: BrightnessControl] = [:]
 
-    /// Applies gamma dimming for displays without DDC. Installed by `AppModel` so the fallback is
-    /// persisted alongside the menu's Software Dimming setting.
-    var softwareFallback: ((CGDirectDisplayID, Double) -> Void)?
-    /// Reports the current software dimming level for a display (0.1…1.0).
-    var softwareLevelProvider: ((CGDirectDisplayID) -> Double)?
+    /// Whether the range extends below the hardware minimum into gamma dimming. Set by `AppModel`
+    /// from the user's settings.
+    private(set) var extendedDimmingEnabled = true
+
+    /// Changes the range mapping, keeping every monitor's hardware brightness where it is and
+    /// clearing any extra dimming so the picture is never left dark by a settings change.
+    func setExtendedDimming(_ enabled: Bool) {
+        guard enabled != extendedDimmingEnabled else { return }
+        extendedDimmingEnabled = enabled
+        for id in Array(levels.keys) {
+            setGamma(1, for: id)
+            if control(for: id) == .hardware, let fraction = hardwareFractions[id] {
+                levels[id] = combinedLevel(hardware: fraction, gamma: 1)
+            } else {
+                levels[id] = 1
+            }
+        }
+    }
+
+    /// Applies a gamma multiplier (0 = black … 1 = untouched) to a display. Installed by
+    /// `AppModel`, which combines it with the menu's persistent Software Dimming setting.
+    var applyGammaFactor: ((CGDirectDisplayID, Double) -> Void)?
 
     private var maxValues: [CGDirectDisplayID: UInt16] = [:]
+    /// Hardware fraction (0…1) last handed to the DDC writer, to skip redundant writes.
+    private var hardwareFractions: [CGDirectDisplayID: Double] = [:]
+    /// Gamma multiplier currently applied per display (absent = 1).
+    private var gammaFactors: [CGDirectDisplayID: Double] = [:]
     private var probing: Set<CGDirectDisplayID> = []
-    /// Latest requested level per display, so a burst of key repeats collapses into the newest
-    /// write. Shared between the main thread and the DDC queue, hence the lock.
+    /// Latest requested hardware fraction per display, so a burst of key repeats collapses into
+    /// the newest write. Shared between the main thread and the DDC queue, hence the lock.
     private var pendingWrites: [CGDirectDisplayID: Double] = [:]
     private let pendingLock = NSLock()
 
@@ -58,15 +88,16 @@ final class BrightnessService: ObservableObject {
     // MARK: State
 
     func level(for id: CGDirectDisplayID) -> Double {
-        if let level = levels[id] { return level }
-        if controls[id] == .software, let gamma = softwareLevelProvider?(id) {
-            return min(1.0, max(0.0, (gamma - 0.2) / 0.8))
-        }
-        return 1.0
+        levels[id] ?? 1.0
     }
 
     func control(for id: CGDirectDisplayID) -> BrightnessControl {
         controls[id] ?? .unknown
+    }
+
+    /// Gamma multiplier the display should currently have (1 when undimmed).
+    func gammaFactor(for id: CGDirectDisplayID) -> Double {
+        gammaFactors[id] ?? 1.0
     }
 
     /// Drops all cached state; call when the display configuration changes.
@@ -74,6 +105,8 @@ final class BrightnessService: ObservableObject {
         levels.removeAll()
         controls.removeAll()
         maxValues.removeAll()
+        hardwareFractions.removeAll()
+        gammaFactors.removeAll()
         probing.removeAll()
         pendingLock.withLock { pendingWrites.removeAll() }
         DDCService.shared.invalidateChannelMappings()
@@ -104,13 +137,43 @@ final class BrightnessService: ObservableObject {
     private func finishProbe(_ id: CGDirectDisplayID, result: (current: UInt16, max: UInt16)?) {
         if let result {
             maxValues[id] = result.max
-            levels[id] = Double(result.current) / Double(result.max)
+            let fraction = Double(result.current) / Double(result.max)
+            hardwareFractions[id] = fraction
             controls[id] = .hardware
+            if levels[id] == nil {
+                levels[id] = combinedLevel(hardware: fraction, gamma: gammaFactor(for: id))
+            }
             Self.log.notice("display \(Int(id)) brightness \(result.current)/\(result.max) via DDC")
         } else {
             controls[id] = .software
+            if levels[id] == nil {
+                levels[id] = gammaFactor(for: id)
+            }
             Self.log.notice("display \(Int(id)) does not answer DDC; using software dimming")
         }
+    }
+
+    // MARK: Range mapping
+
+    private var softwareShare: Double {
+        extendedDimmingEnabled ? Self.softwareShare : 0
+    }
+
+    /// Splits a combined level into the hardware fraction and the gamma multiplier.
+    private func split(_ level: Double) -> (hardware: Double, gamma: Double) {
+        let share = softwareShare
+        if level >= share {
+            return (share < 1 ? (level - share) / (1 - share) : 1, 1)
+        }
+        return (0, share > 0 ? level / share : 0)
+    }
+
+    private func combinedLevel(hardware: Double, gamma: Double) -> Double {
+        let share = softwareShare
+        if gamma < 1, share > 0 {
+            return gamma * share
+        }
+        return share + hardware * (1 - share)
     }
 
     // MARK: Changing brightness
@@ -127,9 +190,13 @@ final class BrightnessService: ObservableObject {
         case .system:
             return
         case .software:
-            applySoftware(level, for: id)
+            levels[id] = level
+            setGamma(level, for: id)
         case .hardware:
-            applyHardware(level, for: id)
+            levels[id] = level
+            let parts = split(level)
+            setGamma(parts.gamma, for: id)
+            setHardware(parts.hardware, for: id)
         case .unknown:
             // Not probed yet: try the monitor once, then apply through whichever path works.
             levels[id] = level
@@ -146,18 +213,20 @@ final class BrightnessService: ObservableObject {
         }
     }
 
-    private func applySoftware(_ level: Double, for id: CGDirectDisplayID) {
-        levels[id] = level
-        // Gamma dimming below ~20% makes the screen unreadable, so map the key range onto 0.2…1.0.
-        softwareFallback?(id, 0.2 + 0.8 * level)
+    private func setGamma(_ factor: Double, for id: CGDirectDisplayID) {
+        let clamped = min(1.0, max(0.0, factor))
+        guard gammaFactor(for: id) != clamped else { return }
+        gammaFactors[id] = clamped == 1 ? nil : clamped
+        applyGammaFactor?(id, clamped)
     }
 
-    private func applyHardware(_ level: Double, for id: CGDirectDisplayID) {
-        levels[id] = level
+    private func setHardware(_ fraction: Double, for id: CGDirectDisplayID) {
+        guard hardwareFractions[id] != fraction else { return }
+        hardwareFractions[id] = fraction
         let maxValue = maxValues[id] ?? 100
         let wasIdle = pendingLock.withLock { () -> Bool in
             let idle = pendingWrites[id] == nil
-            pendingWrites[id] = level
+            pendingWrites[id] = fraction
             return idle
         }
         guard wasIdle else { return }
@@ -167,24 +236,25 @@ final class BrightnessService: ObservableObject {
         }
     }
 
-    /// Runs on the DDC queue: keeps writing the newest requested level until no newer one arrives.
+    /// Runs on the DDC queue: keeps writing the newest requested fraction until no newer one arrives.
     private func flushPendingWrites(for id: CGDirectDisplayID, maxValue: UInt16) {
         while true {
-            guard let level = pendingLock.withLock({ pendingWrites[id] }) else { return }
+            guard let fraction = pendingLock.withLock({ pendingWrites[id] }) else { return }
 
-            let value = UInt16((level * Double(maxValue)).rounded())
+            let value = UInt16((fraction * Double(maxValue)).rounded())
             guard DDCService.shared.writeBrightness(value, for: id) else {
                 pendingLock.withLock { pendingWrites[id] = nil }
                 DispatchQueue.main.async {
                     Self.log.error("DDC write failed for display \(Int(id)); switching to software dimming")
                     self.controls[id] = .software
-                    self.applySoftware(level, for: id)
+                    self.hardwareFractions[id] = nil
+                    self.setGamma(self.level(for: id), for: id)
                 }
                 return
             }
 
             let done = pendingLock.withLock { () -> Bool in
-                guard pendingWrites[id] == level else { return false }
+                guard pendingWrites[id] == fraction else { return false }
                 pendingWrites[id] = nil
                 return true
             }

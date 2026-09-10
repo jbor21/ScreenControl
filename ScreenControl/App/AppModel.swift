@@ -28,13 +28,10 @@ final class AppModel: ObservableObject {
     // MARK: Lifecycle
 
     func start() {
-        brightness.softwareFallback = { [weak self] id, gamma in
+        brightness.setExtendedDimming(settings.extendedDimming)
+        brightness.applyGammaFactor = { [weak self] id, _ in
             guard let self, let display = self.displays.first(where: { $0.id == id }) else { return }
-            self.setSoftwareBrightness(gamma, for: display)
-        }
-        brightness.softwareLevelProvider = { [weak self] id in
-            guard let self, let display = self.displays.first(where: { $0.id == id }) else { return 1.0 }
-            return self.softwareBrightness(for: display)
+            self.applyGamma(for: display)
         }
 
         refresh()
@@ -54,6 +51,10 @@ final class AppModel: ObservableObject {
 
         settings.$brightnessKeysEnabled
             .sink { [weak self] enabled in self?.applyBrightnessKeys(enabled: enabled) }
+            .store(in: &cancellables)
+        settings.$extendedDimming
+            .dropFirst()
+            .sink { [weak self] enabled in self?.brightness.setExtendedDimming(enabled) }
             .store(in: &cancellables)
 
         // Re-publish changes from the nested observable objects so menu and settings views update.
@@ -243,22 +244,39 @@ final class AppModel: ObservableObject {
     }
 
     func setSoftwareBrightness(_ level: Double, for display: DisplayInfo) {
-        if level >= 0.999 {
-            settings.softwareBrightness[display.persistentID] = nil
-            DisplayService.setSoftwareBrightness(1.0, for: display.id)
+        settings.softwareBrightness[display.persistentID] = level >= 0.999 ? nil : level
+        applyGamma(for: display)
+    }
+
+    /// Writes the display's gamma table from the persistent Software Dimming setting combined
+    /// with the transient extra dimming the brightness keys asked for.
+    private func applyGamma(for display: DisplayInfo) {
+        let gamma = softwareBrightness(for: display) * brightness.gammaFactor(for: display.id)
+        if gamma >= 0.999 {
+            if hasAppliedDimming {
+                // Only a full ColorSync restore truly undoes our table; then re-dim the others.
+                DisplayService.restoreGamma()
+                for other in displays where other.id != display.id {
+                    applyGammaIfDimmed(other)
+                }
+            }
         } else {
-            settings.softwareBrightness[display.persistentID] = level
-            DisplayService.setSoftwareBrightness(level, for: display.id)
+            DisplayService.setSoftwareBrightness(gamma, for: display.id)
+            hasAppliedDimming = true
+        }
+    }
+
+    private func applyGammaIfDimmed(_ display: DisplayInfo) {
+        let gamma = softwareBrightness(for: display) * brightness.gammaFactor(for: display.id)
+        if gamma < 0.999 {
+            DisplayService.setSoftwareBrightness(gamma, for: display.id)
             hasAppliedDimming = true
         }
     }
 
     private func reapplySoftwareBrightness() {
         for display in displays {
-            if let level = settings.softwareBrightness[display.persistentID], level < 0.999 {
-                DisplayService.setSoftwareBrightness(level, for: display.id)
-                hasAppliedDimming = true
-            }
+            applyGammaIfDimmed(display)
         }
     }
 
