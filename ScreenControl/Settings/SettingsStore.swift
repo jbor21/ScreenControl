@@ -12,6 +12,8 @@ final class SettingsStore: ObservableObject {
         static let allowBuiltinRotation = "allowBuiltinRotation"
         static let showBuiltinDisplay = "showBuiltinDisplay"
         static let softwareBrightness = "softwareBrightness.v1"
+        static let brightnessKeysEnabled = "brightnessKeysEnabled"
+        static let hasRequestedAccessibility = "hasRequestedAccessibility"
     }
 
     @Published var shortcuts: [HotkeyAction: KeyboardShortcut] {
@@ -40,6 +42,19 @@ final class SettingsStore: ObservableObject {
         didSet { store(softwareBrightness, forKey: Keys.softwareBrightness) }
     }
 
+    /// Whether the keyboard's brightness keys are redirected to the external display under the
+    /// mouse pointer (needs the Accessibility permission).
+    @Published var brightnessKeysEnabled: Bool {
+        didSet { defaults.set(brightnessKeysEnabled, forKey: Keys.brightnessKeysEnabled) }
+    }
+
+    /// The system Accessibility prompt is shown automatically once; after that the user opts in
+    /// from Settings so the app never nags.
+    var hasRequestedAccessibility: Bool {
+        get { defaults.bool(forKey: Keys.hasRequestedAccessibility) }
+        set { defaults.set(newValue, forKey: Keys.hasRequestedAccessibility) }
+    }
+
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -50,6 +65,7 @@ final class SettingsStore: ObservableObject {
         allowBuiltinRotation = defaults.bool(forKey: Keys.allowBuiltinRotation)
         showBuiltinDisplay = defaults.object(forKey: Keys.showBuiltinDisplay) as? Bool ?? true
         softwareBrightness = Self.load([String: Double].self, forKey: Keys.softwareBrightness, from: defaults) ?? [:]
+        brightnessKeysEnabled = defaults.object(forKey: Keys.brightnessKeysEnabled) as? Bool ?? true
     }
 
     func restoreDefaultShortcuts() {

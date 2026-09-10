@@ -207,7 +207,9 @@ enum RotationService {
 
     /// Finds the IOFramebuffer behind a display by matching EDID vendor / product / serial on the
     /// IODisplayConnect children, the same way displayplacer's Intel path does.
-    private static func framebufferService(for id: CGDirectDisplayID) -> io_service_t? {
+    /// The caller owns the returned object and must `IOObjectRelease` it. Also used by
+    /// `DDCService` for Intel I2C access.
+    static func framebufferService(for id: CGDirectDisplayID) -> io_service_t? {
         let vendor = CGDisplayVendorNumber(id)
         let model = CGDisplayModelNumber(id)
         let serial = CGDisplaySerialNumber(id)

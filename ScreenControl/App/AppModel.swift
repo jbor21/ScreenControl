@@ -16,6 +16,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastError: String?
 
     let settings = SettingsStore.shared
+    let brightness = BrightnessService.shared
+    let brightnessKeys = BrightnessKeyService.shared
 
     private static let log = Logger(subsystem: "com.boboborenstein.ScreenControl", category: "app")
     private var cancellables: Set<AnyCancellable> = []
@@ -26,22 +28,59 @@ final class AppModel: ObservableObject {
     // MARK: Lifecycle
 
     func start() {
+        brightness.softwareFallback = { [weak self] id, gamma in
+            guard let self, let display = self.displays.first(where: { $0.id == id }) else { return }
+            self.setSoftwareBrightness(gamma, for: display)
+        }
+        brightness.softwareLevelProvider = { [weak self] id in
+            guard let self, let display = self.displays.first(where: { $0.id == id }) else { return 1.0 }
+            return self.softwareBrightness(for: display)
+        }
+
         refresh()
 
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
-            .sink { [weak self] _ in self?.refresh() }
+            .sink { [weak self] _ in
+                self?.brightness.reset()
+                self?.refresh()
+            }
             .store(in: &cancellables)
 
         HotkeyManager.shared.onAction = { [weak self] action in
             self?.perform(action)
         }
         HotkeyManager.shared.apply(settings.shortcuts)
+
+        settings.$brightnessKeysEnabled
+            .sink { [weak self] enabled in self?.applyBrightnessKeys(enabled: enabled) }
+            .store(in: &cancellables)
+
+        // Re-publish changes from the nested observable objects so menu and settings views update.
+        brightness.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        brightnessKeys.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
     }
 
     func shutdown() {
+        brightnessKeys.stop()
         if hasAppliedDimming {
             DisplayService.restoreGamma()
+        }
+    }
+
+    private func applyBrightnessKeys(enabled: Bool) {
+        guard enabled else {
+            brightnessKeys.stop()
+            return
+        }
+        brightnessKeys.start()
+        if !brightnessKeys.isTrusted && !settings.hasRequestedAccessibility {
+            settings.hasRequestedAccessibility = true
+            brightnessKeys.requestPermission()
         }
     }
 
@@ -61,6 +100,7 @@ final class AppModel: ObservableObject {
         currentModeIDs = newCurrent
 
         reapplySoftwareBrightness()
+        brightness.probe(current)
     }
 
     var visibleDisplays: [DisplayInfo] {
@@ -175,6 +215,25 @@ final class AppModel: ObservableObject {
             DisplayService.setMirroring(of: display.id, to: main.id)
         }
         scheduleRefresh()
+    }
+
+    // MARK: Brightness
+
+    /// Brightness (0…1) for an external display, hardware when the monitor supports DDC/CI.
+    func brightnessLevel(for display: DisplayInfo) -> Double {
+        brightness.level(for: display.id)
+    }
+
+    func brightnessControl(for display: DisplayInfo) -> BrightnessControl {
+        brightness.control(for: display.id)
+    }
+
+    func setBrightness(_ level: Double, for display: DisplayInfo) {
+        brightness.setLevel(level, for: display.id)
+    }
+
+    func adjustBrightness(by delta: Double, for display: DisplayInfo) {
+        brightness.adjust(by: delta, for: display.id)
     }
 
     // MARK: Software dimming
