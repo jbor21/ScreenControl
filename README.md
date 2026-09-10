@@ -2,8 +2,9 @@
 
 A small, free macOS menu bar app for controlling external displays, built as a personal
 replacement for [BetterDisplay](https://github.com/waydabber/betterdisplay). The headline
-feature is **display rotation with a global keyboard shortcut**; it also switches resolution
-and refresh rate, dims displays in software, and toggles mirroring.
+feature is **display rotation with a global keyboard shortcut**; it also sends the keyboard's
+**brightness keys to the monitor under the mouse**, switches resolution and refresh rate, dims
+displays in software, and toggles mirroring.
 
 Requires macOS 14 (Sonoma) or later. Works on Apple Silicon and Intel Macs.
 
@@ -23,11 +24,17 @@ Requires macOS 14 (Sonoma) or later. Works on Apple Silicon and Intel Macs.
   actions for jumping straight to 90°, 180° or 270°.
 - **Choose what the hotkeys act on**: the display under the mouse pointer (default), the main
   display, all external displays at once, or one specific monitor.
+- **Brightness keys follow the mouse.** Press the keyboard's brightness keys (F1/F2 or the
+  sun keys) while the pointer is on an external monitor and *that monitor's* brightness changes,
+  with the normal macOS brightness overlay drawn on it. Move the pointer back to the MacBook
+  screen and the same keys adjust the built-in display as usual. ⌥⇧ gives fine steps. There is
+  also a Brightness picker per display in the menu. Needs the **Accessibility** permission
+  (see below).
 - **Resolution and refresh rate** switching per display, including HiDPI variants.
 - **Software dimming** (gamma-based) per display, for monitors that are too bright at their
   lowest hardware setting. Remembered per display; reset when the app quits.
 - **Mirroring** toggle for secondary displays.
-- **Launch at login**, no Dock icon, no Accessibility permission prompts.
+- **Launch at login**, no Dock icon.
 
 ## Install
 
@@ -49,8 +56,28 @@ Requires macOS 14 (Sonoma) or later. Works on Apple Silicon and Intel Macs.
 
    Then turn on **Settings → General → Launch ScreenControl at login**.
 
+4. For the brightness keys, grant the Accessibility permission when macOS asks (or use
+   **Settings → General → Brightness keys → Request Permission…**). Everything else works
+   without it.
+
 No Apple Developer account is needed: the project signs "to run locally" (ad hoc). If you
 have a team set up in Xcode you can pick it under Signing & Capabilities instead.
+
+### Updating
+
+Updating is the same two commands: pull the latest source and rebuild into `/Applications`.
+The script quits the running copy, replaces it and relaunches it, and your settings are kept.
+
+```bash
+cd ScreenControl
+git pull
+scripts/build-app.sh --install
+```
+
+One caveat of ad-hoc signing: macOS ties the Accessibility permission to the exact build, so
+after an update the brightness keys may stop working until you remove ScreenControl from
+**System Settings → Privacy & Security → Accessibility** (select it, press −) and add it back.
+Rotation, hotkeys and everything else are unaffected.
 
 ### Without Xcode.app
 
@@ -86,6 +113,26 @@ the menu and hotkeys will show an error rather than silently doing nothing.
 Global shortcuts use Carbon's `RegisterEventHotKey`, which fires system-wide without the app
 needing Accessibility or Input Monitoring permission.
 
+## How the brightness keys work
+
+Brightness keys reach applications as `NX_SYSDEFINED` "aux control" events, which only a
+CGEvent tap can see. ScreenControl installs one (this is what needs the Accessibility
+permission) and, on each press, looks at which display the mouse pointer is on:
+
+- **Built-in display** (or an Apple display such as a Studio Display): the event is passed
+  through untouched and macOS handles it exactly as before.
+- **External monitor**: the event is swallowed and the monitor's brightness is changed over
+  **DDC/CI**, the I2C protocol monitors use for their on-screen menu settings. On Apple Silicon
+  this goes through the DCP's `IOAVService` (private IOKit functions resolved at runtime, the
+  same route MonitorControl, Crisp and BetterDisplay use); on Intel through the framebuffer's
+  public `IOI2CInterface`. The native brightness bezel is shown on that monitor via
+  `OSDUIHelper`.
+- **Monitors that ignore DDC/CI** (some TVs, most displays behind USB-C docks or DisplayLink
+  adapters) fall back to software dimming, so the keys still do something; the menu shows which
+  mode is in use.
+
+## Project layout
+
 ## Project layout
 
 ```
@@ -94,6 +141,7 @@ ScreenControl/
   App/            App entry point, AppDelegate, AppModel (observable state + actions)
   Displays/       DisplayInfo model and CoreGraphics wrappers (modes, mirroring, gamma)
   Rotation/       RotationService: SkyLight → MonitorPanel → IOKit rotation chain
+  Brightness/     DDCService (I2C transport), BrightnessService (levels, fallback), key tap, OSD
   Hotkeys/        KeyboardShortcut model, HotkeyAction/HotkeyTarget, Carbon HotkeyManager
   Menu/           SwiftUI MenuBarExtra content
   Settings/       SettingsStore (UserDefaults), settings window + views, shortcut recorder
@@ -113,15 +161,25 @@ The project uses Xcode's synchronized groups, so dropping a new `.swift` file an
   General if you really want it.
 - **A shortcut does nothing.** Another app may have registered the same combination first;
   record a different one. Shortcuts need at least one of ⌘, ⌥ or ⌃.
+- **Brightness keys still change the MacBook screen while the mouse is on the monitor.** Open
+  Settings → General → Brightness keys: the permission line must say "Granted". If it doesn't,
+  click *Open Accessibility Settings* and enable ScreenControl; if it is already enabled there,
+  remove it and add it again (see *Updating*). Also make sure no other display utility
+  (BetterDisplay, MonitorControl, Lunar) is grabbing the keys at the same time.
+- **The menu says "Software dimming (monitor ignores DDC/CI)".** The monitor did not answer the
+  brightness query. Check the monitor's own menu for a "DDC/CI" setting and turn it on; monitors
+  behind docks or DisplayLink adapters usually cannot be reached at all.
 - **macOS says the app is damaged / from an unidentified developer.** The app is ad-hoc
   signed. Right-click → Open once, or run
   `xattr -dr com.apple.quarantine /Applications/ScreenControl.app`.
 
 ## Credits
 
-Inspired by BetterDisplay. The rotation and hotkey techniques were informed by the open-source
-[Crisp](https://github.com/didriksg/Crisp), [FreeDisplay](https://github.com/huberdf/FreeDisplay)
-and [displayplacer](https://github.com/jakehilborn/displayplacer) projects.
+Inspired by BetterDisplay. The rotation, DDC/CI, brightness-key and hotkey techniques were
+informed by the open-source [Crisp](https://github.com/didriksg/Crisp),
+[FreeDisplay](https://github.com/huberdf/FreeDisplay),
+[MonitorControl](https://github.com/MonitorControl/MonitorControl) and
+[displayplacer](https://github.com/jakehilborn/displayplacer) projects.
 
 ## License
 
