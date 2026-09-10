@@ -61,6 +61,7 @@ struct DisplayMenu: View {
     @ObservedObject var model = AppModel.shared
 
     private static let dimmingLevels: [Int] = [100, 90, 80, 70, 60, 50, 40, 30]
+    private static let brightnessLevels: [Int] = [100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0]
 
     var body: some View {
         Menu {
@@ -112,6 +113,18 @@ struct DisplayMenu: View {
                         }
                     }
                     .pickerStyle(.inline)
+                }
+            }
+
+            if !display.isBuiltin, model.brightnessControl(for: display) != .system {
+                Section("Brightness") {
+                    Picker("Brightness", selection: brightnessBinding) {
+                        ForEach(Self.brightnessLevels, id: \.self) { level in
+                            Text("\(level)%").tag(level)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    Text(model.brightnessControl(for: display).label)
                 }
             }
 
@@ -167,6 +180,13 @@ struct DisplayMenu: View {
         Binding(
             get: { model.currentModeIDs[display.id] ?? 0 },
             set: { model.applyMode($0, for: display) }
+        )
+    }
+
+    private var brightnessBinding: Binding<Int> {
+        Binding(
+            get: { Int((model.brightnessLevel(for: display) * 10).rounded()) * 10 },
+            set: { model.setBrightness(Double($0) / 100, for: display) }
         )
     }
 

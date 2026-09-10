@@ -11,7 +11,7 @@ struct SettingsView: View {
             AboutView()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 540, height: 460)
+        .frame(width: 560, height: 560)
     }
 }
 
@@ -39,6 +39,36 @@ struct GeneralSettingsView: View {
                     }
                 }
                 Text("Choose which display the rotation shortcuts act on. \"Display under the mouse pointer\" is handy when you have several external monitors.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Brightness keys") {
+                Toggle("Brightness keys control the display under the mouse pointer", isOn: $settings.brightnessKeysEnabled)
+                if settings.brightnessKeysEnabled {
+                    HStack {
+                        Text("Accessibility permission")
+                        Spacer()
+                        if model.brightnessKeys.isActive {
+                            Label("Granted", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Label("Needed", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    if !model.brightnessKeys.isActive {
+                        HStack {
+                            Button("Request Permission…") {
+                                model.brightnessKeys.requestPermission()
+                            }
+                            Button("Open Accessibility Settings") {
+                                BrightnessKeyService.openAccessibilitySettings()
+                            }
+                        }
+                    }
+                }
+                Text("With the pointer on an external monitor, the keyboard's brightness keys change that monitor's brightness (DDC/CI, or software dimming if the monitor doesn't support it). With the pointer on the built-in display they work as usual. Intercepting the keys requires the Accessibility permission; if it stops working after you rebuild the app, remove ScreenControl from the Accessibility list and add it again.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -226,7 +256,7 @@ struct AboutView: View {
                 .font(.title)
             Text(version)
                 .foregroundStyle(.secondary)
-            Text("Rotate external displays from the menu bar or with a global keyboard shortcut. Also switches resolution and refresh rate, dims displays in software, and toggles mirroring.")
+            Text("Rotate external displays from the menu bar or with a global keyboard shortcut. Sends the keyboard's brightness keys to the monitor under the mouse, switches resolution and refresh rate, dims displays in software, and toggles mirroring.")
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 400)
             Link("Source on GitHub", destination: URL(string: "https://github.com/boboborenstein-collab/ScreenControl")!)
