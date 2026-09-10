@@ -33,6 +33,16 @@ Requires macOS 14 (Sonoma) or later. Works on Apple Silicon and Intel Macs.
 - **Dim to black.** A monitor's own brightness setting bottoms out at "dim", never "off", so the
   lowest four brightness steps keep dimming in software until the picture is completely black
   (BetterDisplay's "combined" brightness). Can be turned off in Settings.
+- **Turn a display off and back on** from its menu or with a shortcut. On Apple Silicon this
+  is a real disconnect (the monitor sleeps, windows move to the remaining displays); turning it
+  back on brings it straight back, no cable fiddling. Elsewhere the monitor is put into standby
+  over DDC/CI instead. Anything left off is restored when the app quits.
+- **Switch the monitor's input** (HDMI 1/2, DisplayPort, USB-C…) from the menu or a shortcut,
+  for monitors shared with a PC or console. Uses DDC/CI, so it works on the same monitors the
+  brightness keys work on.
+- **Presets**: save the current setup (rotation, resolution, refresh rate, brightness and
+  dimming of every connected display) under a name and restore it from the menu or with its own
+  global shortcut. Displays are matched by hardware identity, so presets survive reconnects.
 - **Resolution and refresh rate** switching per display, including HiDPI variants.
 - **Software dimming** (gamma-based) per display, for monitors that are too bright at their
   lowest hardware setting. Remembered per display; reset when the app quits.
@@ -138,7 +148,21 @@ permission) and, on each press, looks at which display the mouse pointer is on:
   dimmest setting down to black. The extra dimming is transient: it is undone when the app
   quits, and never persisted, so a display cannot come back black after a restart.
 
-## Project layout
+## Display off/on, inputs and presets
+
+- **Turn off** uses `SLSConfigureDisplayEnabled` (SkyLight, resolved at runtime) inside a
+  `CGBeginDisplayConfiguration` transaction, which is what BetterDisplay's *Disconnect* does.
+  The display vanishes from `CGGetOnlineDisplayList`, so ScreenControl remembers it (by its
+  persistent ID) and finds it again through `SLSGetDisplayList` to re-enable it. It refuses to
+  turn off the last active display. On Intel the SkyLight call is a no-op, so the monitor is
+  sent DDC/CI power-mode standby (VCP `0xD6`) instead.
+- **Input switching** writes DDC/CI VCP `0x60`. Standard codes are used (HDMI 1 = `0x11`,
+  HDMI 2 = `0x12`, DisplayPort = `0x0F`, USB-C = `0x1B`; LG uses `0x19` for USB-C). If you switch
+  the monitor to another device, macOS loses the display, so the way back is the monitor's own
+  buttons (or the other device switching it back).
+- **Presets** are stored as JSON in the app's preferences. Applying one rotates first (the slow,
+  asynchronous step), then picks the saved resolution/refresh rate (matching either orientation,
+  since rotated displays report swapped dimensions), then brightness and dimming.
 
 ## Project layout
 
@@ -149,6 +173,9 @@ ScreenControl/
   Displays/       DisplayInfo model and CoreGraphics wrappers (modes, mirroring, gamma)
   Rotation/       RotationService: SkyLight → MonitorPanel → IOKit rotation chain
   Brightness/     DDCService (I2C transport), BrightnessService (levels, fallback), key tap, OSD
+  Power/          DisplayPowerService: SkyLight disconnect / DDC standby, remembers what is off
+  Inputs/         DisplayInput codes and InputService (DDC/CI VCP 0x60)
+  Presets/        DisplayPreset model (capture/apply live in AppModel)
   Hotkeys/        KeyboardShortcut model, HotkeyAction/HotkeyTarget, Carbon HotkeyManager
   Menu/           SwiftUI MenuBarExtra content
   Settings/       SettingsStore (UserDefaults), settings window + views, shortcut recorder
@@ -173,6 +200,14 @@ The project uses Xcode's synchronized groups, so dropping a new `.swift` file an
   click *Open Accessibility Settings* and enable ScreenControl; if it is already enabled there,
   remove it and add it again (see *Updating*). Also make sure no other display utility
   (BetterDisplay, MonitorControl, Lunar) is grabbing the keys at the same time.
+- **"Turn Off Display" is greyed out.** Either it is the only active display, or (on Intel) the
+  monitor does not answer DDC/CI so there is no standby command to send.
+- **A turned-off display did not come back.** Use the menu's *Turned Off → Turn On …* item
+  again; if macOS has lost track of it, unplug and reconnect the cable. Quitting ScreenControl
+  also re-enables every display it turned off.
+- **The monitor ignores the input switch.** Not all monitors implement VCP 0x60, and some use
+  non-standard codes for USB-C (try both USB-C entries). The monitor's on-screen menu may also
+  need "DDC/CI" enabled.
 - **The menu says "Software dimming (monitor ignores DDC/CI)".** The monitor did not answer the
   brightness query. Check the monitor's own menu for a "DDC/CI" setting and turn it on; monitors
   behind docks or DisplayLink adapters usually cannot be reached at all.
