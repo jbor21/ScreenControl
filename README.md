@@ -53,7 +53,7 @@ Requires macOS 14 (Sonoma) or later. Works on Apple Silicon and Intel Macs.
 1. Clone the repo and open the project:
 
    ```bash
-   git clone https://github.com/boboborenstein-collab/ScreenControl.git
+   git clone https://github.com/jbor21/ScreenControl.git
    cd ScreenControl
    open ScreenControl.xcodeproj
    ```
@@ -220,7 +220,8 @@ Inspired by BetterDisplay. The rotation, DDC/CI, brightness-key and hotkey techn
 informed by the open-source [Crisp](https://github.com/didriksg/Crisp),
 [FreeDisplay](https://github.com/huberdf/FreeDisplay),
 [MonitorControl](https://github.com/MonitorControl/MonitorControl) and
-[displayplacer](https://github.com/jakehilborn/displayplacer) projects.
+[displayplacer](https://github.com/jakehilborn/displayplacer) projects. Their license notices
+are in [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
 
 ## License
 

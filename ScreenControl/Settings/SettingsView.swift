@@ -373,7 +373,7 @@ struct AboutView: View {
             Text("Rotate external displays from the menu bar or with a global keyboard shortcut. Sends the keyboard's brightness keys to the monitor under the mouse, switches resolution and refresh rate, dims displays in software, and toggles mirroring.")
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 400)
-            Link("Source on GitHub", destination: URL(string: "https://github.com/boboborenstein-collab/ScreenControl")!)
+            Link("Source on GitHub", destination: URL(string: "https://github.com/jbor21/ScreenControl")!)
             Text("Inspired by BetterDisplay; rotation and hotkey techniques informed by the open-source Crisp, FreeDisplay and displayplacer projects.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
