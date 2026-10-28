@@ -220,7 +220,8 @@ Inspired by BetterDisplay. The rotation, DDC/CI, brightness-key and hotkey techn
 informed by the open-source [Crisp](https://github.com/didriksg/Crisp),
 [FreeDisplay](https://github.com/huberdf/FreeDisplay),
 [MonitorControl](https://github.com/MonitorControl/MonitorControl) and
-[displayplacer](https://github.com/jakehilborn/displayplacer) projects.
+[displayplacer](https://github.com/jakehilborn/displayplacer) projects. Their license notices
+are in [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
 
 ## License
 
