@@ -1,7 +1,6 @@
 # ScreenControl
 
-A small, free macOS menu bar app for controlling external displays, built as a personal
-replacement for [BetterDisplay](https://github.com/waydabber/betterdisplay). The headline
+A small, free macOS menu bar app for controlling external displays. The headline
 feature is **display rotation with a global keyboard shortcut**; it also sends the keyboard's
 **brightness keys to the monitor under the mouse**, switches resolution and refresh rate, dims
 displays in software, and toggles mirroring.
