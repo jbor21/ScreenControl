@@ -53,7 +53,7 @@ Requires macOS 14 (Sonoma) or later. Works on Apple Silicon and Intel Macs.
 1. Clone the repo and open the project:
 
    ```bash
-   git clone https://github.com/boboborenstein-collab/ScreenControl.git
+   git clone https://github.com/jbor21/ScreenControl.git
    cd ScreenControl
    open ScreenControl.xcodeproj
    ```
